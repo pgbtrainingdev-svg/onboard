@@ -13,6 +13,10 @@
 <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-database-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-storage-compat.js"></script>
+<script>
+  // Day/Night mode: apply the person's saved choice before the page paints (no flash)
+  try { var _t = localStorage.getItem('onboardiq_theme'); if (_t === 'dark' || _t === 'light') document.documentElement.setAttribute('data-theme', _t); } catch (e) {}
+</script>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -48,10 +52,19 @@
     --topbar-h:  60px;
     --shadow-sm: 0 1px 4px rgba(232,85,62,0.07), 0 1px 2px rgba(0,0,0,0.04);
     --shadow-md: 0 4px 18px rgba(232,85,62,0.10), 0 2px 6px rgba(0,0,0,0.05);
+    --soft-a: #FDF0ED;
+    --soft-b: #FEF5F3;
+    --req-bg: #FFF0EE;
+    --todo-bg: #FDE8D7;
+    --todo-text: #B4541A;
+    --todo-border: #F4C29B;
+    --auth-a: #FDF0EC;
+    --auth-b: #F7E8E2;
   }
 
+  /* Night mode — follows the device setting unless the person picks Day/Night with the toggle */
   @media (prefers-color-scheme: dark) {
-    :root {
+    :root:not([data-theme="light"]) {
       --bg:     #1A1210;
       --bg2:    #221816;
       --bg3:    #2A1F1C;
@@ -72,7 +85,47 @@
       --gray-bg:   #2A1F1C;
       --gray-text: #C4A898;
       --coral-soft:#2A1510;
+      --soft-a: #2A1714;
+      --soft-b: #231512;
+      --req-bg: #2E1512;
+      --todo-bg: #3A2210;
+      --todo-text: #F4A261;
+      --todo-border: #6B4020;
+      --auth-a: #1A1210;
+      --auth-b: #2A1F1C;
+      color-scheme: dark;
     }
+  }
+  :root[data-theme="dark"] {
+      --bg:     #1A1210;
+      --bg2:    #221816;
+      --bg3:    #2A1F1C;
+      --border: rgba(232,85,62,0.15);
+      --border2: rgba(232,85,62,0.28);
+      --border-gray: rgba(255,255,255,0.08);
+      --text:   #F5EDE8;
+      --text2:  #C4A898;
+      --text3:  #7A5E56;
+      --blue-bg:   #192845;
+      --blue-text: #78AAEE;
+      --green-bg:  #0E2818;
+      --green-text:#5ECC7E;
+      --amber-bg:  #2A1C00;
+      --amber-text:#F0BA40;
+      --red-bg:    #2A100C;
+      --red-text:  #F07468;
+      --gray-bg:   #2A1F1C;
+      --gray-text: #C4A898;
+      --coral-soft:#2A1510;
+      --soft-a: #2A1714;
+      --soft-b: #231512;
+      --req-bg: #2E1512;
+      --todo-bg: #3A2210;
+      --todo-text: #F4A261;
+      --todo-border: #6B4020;
+      --auth-a: #1A1210;
+      --auth-b: #2A1F1C;
+      color-scheme: dark;
   }
 
   body {
@@ -156,6 +209,9 @@
     font-family: inherit; transition: background 0.13s, border-color 0.13s;
   }
   .topbar-btn:hover { background: var(--bg2); border-color: var(--border2); }
+  .theme-toggle { width: 36px; height: 36px; border-radius: 50%; border: 1px solid var(--border2); background: var(--bg); color: var(--text2); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; font-size: 17px; flex-shrink: 0; }
+  .theme-toggle:hover { color: var(--coral); border-color: var(--coral); }
+  .theme-toggle.on-auth { position: fixed; top: 16px; right: 16px; z-index: 50; }
   .sync-badge { font-family: inherit; font-size: 11px; font-weight: 600; padding: 5px 10px; border-radius: 20px; border: 1px solid var(--border); background: var(--bg2); color: var(--text3); cursor: pointer; white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
   .sync-badge[data-state="green"] { color: var(--green-text); background: var(--green-bg); border-color: transparent; }
   .sync-badge[data-state="amber"] { color: var(--amber-text); background: var(--amber-bg); border-color: transparent; }
@@ -281,7 +337,7 @@
   }
   .checklist-inner { background: var(--bg); border-radius: var(--radius-lg); overflow: hidden; }
   .checklist-head {
-    padding: 18px 20px; background: linear-gradient(135deg, #FDF0ED, #FFF7F4);
+    padding: 18px 20px; background: linear-gradient(135deg, var(--soft-a), var(--soft-b));
     border-bottom: 1px solid rgba(232,85,62,0.15); display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
   }
   .checklist-head .cl-title { font-size: 16px; font-weight: 700; color: var(--text); letter-spacing: -0.01em; }
@@ -299,7 +355,7 @@
   .step.step-todo .inline-btn { background: var(--coral); color: #fff; }
   .todo-badge {
     display: inline-block; margin-left: 8px; padding: 2px 8px; border-radius: 20px; vertical-align: 1px;
-    background: #FDE8D7; color: #B4541A; border: 1px solid #F4C29B; font-size: 10px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase;
+    background: var(--todo-bg); color: var(--todo-text); border: 1px solid var(--todo-border); font-size: 10px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase;
   }
   .step.step-next { background: linear-gradient(90deg, rgba(232,85,62,0.08), rgba(232,85,62,0.02)); position: relative; }
   .step.step-next::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--coral); }
@@ -527,7 +583,7 @@
   /* Auth screen */
   #auth-screen {
     position: fixed; inset: 0;
-    background: linear-gradient(145deg, #FDF0EC 0%, #F7E8E2 50%, #FDF0EC 100%);
+    background: linear-gradient(145deg, var(--auth-a) 0%, var(--auth-b) 50%, var(--auth-a) 100%);
     display: flex; align-items: center; justify-content: center;
     z-index: 500; flex-direction: column; gap: 0;
     overflow-y: auto; -webkit-overflow-scrolling: touch;
@@ -624,7 +680,7 @@
   .vid-tab-btn .tab-pct   { font-size:11px; font-weight:700; }
   .vid-tab-btn.active { background:var(--coral-soft); color:var(--coral); border-bottom-color:var(--coral); }
   .vid-tab-btn.active .tab-count { color:var(--coral); opacity:.75; }
-  .vid-tab-btn.req-tab.active { background:#FFF0EE; color:var(--red-text); border-bottom-color:var(--red-text); }
+  .vid-tab-btn.req-tab.active { background:var(--req-bg); color:var(--red-text); border-bottom-color:var(--red-text); }
   .vid-tab-btn.req-tab.active .tab-pct { color:var(--red-text); }
   .vid-tab-btn.opt-tab.active { background:var(--gray-bg); color:var(--gray-text); border-bottom-color:var(--gray-text); }
   .vid-tab-btn.opt-tab.active .tab-pct { color:var(--gray-text); }
@@ -666,11 +722,12 @@
 
 <!-- Auth screen -->
 <div id="auth-screen">
+  <button class="theme-toggle on-auth" type="button" onclick="toggleTheme()" aria-label="Switch day / night mode" title="Switch day / night mode"><i class="ti ti-moon theme-ic" aria-hidden="true"></i></button>
   <div class="auth-card">
     <div class="auth-header">
       <div class="auth-logo-wrap"><i class="ti ti-users-group" aria-hidden="true"></i></div>
       <h1>Welcome to OnboardIQ</h1>
-      <p>Your HR onboarding hub — sign in to get started.</p>
+      <p id="auth-sub">Your HR onboarding hub — sign in to get started.</p>
     </div>
     <div class="auth-tab">
       <button class="auth-tab-btn active" id="tab-login"  onclick="showTab('login')">Sign in</button>
@@ -686,7 +743,33 @@
       </div>
       <div class="auth-foot">
         <button class="auth-btn auth-btn-primary" onclick="doLogin()">Sign in</button>
-        <p style="font-size:11px;color:var(--text3);text-align:center">Try it out — username: <strong>admin</strong> · password: <strong>admin123</strong></p>
+      </div>
+    </div>
+
+    <!-- First-time set-up: create the Administrator account (shown only when no Admin exists yet) -->
+    <div id="setup-form" style="display:none">
+      <div class="auth-body">
+        <div class="auth-field"><label>Full name</label><input id="su-name" type="text" placeholder="Administrator's full name"></div>
+        <div class="auth-field"><label>Email</label><input id="su-email" type="email" placeholder="you@company.com"></div>
+        <div class="auth-field"><label>Username</label><input id="su-username" type="text" placeholder="Choose an admin username" autocomplete="off"></div>
+        <div class="auth-field"><label>Password</label><input id="su-password" type="password" placeholder="At least 8 characters" autocomplete="new-password"></div>
+        <div class="auth-field"><label>Confirm password</label><input id="su-password2" type="password" placeholder="Type it again" autocomplete="new-password"></div>
+        <div class="auth-err" id="setup-err"></div>
+      </div>
+      <div class="auth-foot">
+        <button class="auth-btn auth-btn-primary" onclick="createFirstAdmin()">Create Admin account</button>
+      </div>
+    </div>
+
+    <!-- Forced password change (accounts that still use a retired default password) -->
+    <div id="changepw-form" style="display:none">
+      <div class="auth-body">
+        <div class="auth-field"><label>New password</label><input id="cp-password" type="password" placeholder="At least 8 characters" autocomplete="new-password"></div>
+        <div class="auth-field"><label>Confirm new password</label><input id="cp-password2" type="password" placeholder="Type it again" autocomplete="new-password"></div>
+        <div class="auth-err" id="changepw-err"></div>
+      </div>
+      <div class="auth-foot">
+        <button class="auth-btn auth-btn-primary" onclick="saveForcedPasswordChange()">Save new password</button>
       </div>
     </div>
 
@@ -725,6 +808,7 @@
     <header class="topbar">
       <h2 id="page-title">Dashboard</h2>
       <div class="topbar-right">
+        <button class="theme-toggle" type="button" onclick="toggleTheme()" aria-label="Switch day / night mode" title="Switch day / night mode"><i class="ti ti-moon theme-ic" aria-hidden="true"></i></button>
         <button id="syncBadge" class="sync-badge" type="button" onclick="manualSync()" data-state="gray" title="Cloud sync">☁ Sync not set up</button>
         <button class="topbar-btn" onclick="openModal('notifications')" aria-label="Notifications" title="Notifications" id="bell-btn" style="position:relative">
           <i class="ti ti-bell" aria-hidden="true"></i>
@@ -1002,13 +1086,12 @@ let currentPanel = 'dashboard';
 /* ── Auth state ── */
 let currentUser = null; // { name, email, dept, role, initials }
 
-// Pre-seeded accounts (admin always exists, not in pending queue)
-const USER_REGISTRY = [
-  { name: 'Admin',      username: 'admin',  email: 'admin@company.com', password: 'admin123', dept: 'Administration', role: 'admin', initials: 'AD', status: 'approved' },
-  { name: 'HR Manager', username: 'hr',     email: 'hr@company.com',    password: 'hr123',    dept: 'HR / Legal',     role: 'hr',    initials: 'HR', status: 'approved' },
-];
+// No accounts or passwords are built into this file. The first person to open a brand-new
+// installation creates the Administrator account (see createFirstAdmin); everyone else registers
+// and is approved by an Admin, who can then set their access level (Employee/Manager/HR/Admin).
+const USER_REGISTRY = [];
 
-const PENDING_USERS = []; // { name, email, password, dept, role, initials, requestedAt }
+const PENDING_USERS = []; // { name, email, passSalt, passHash, dept, role, initials, requestedAt }
 
 const NOTIFICATIONS = []; // { id, type, title, sub, time, read, email? }
 
@@ -1255,7 +1338,7 @@ function panelJourney() {
       title: 'Built on Trust',
       icon: 'ti-shield-heart',
       color: '#E8553E',
-      colorSoft: '#FDECEA',
+      colorSoft: 'rgba(232,85,62,0.13)',
       body: 'We are honest, sincere and true to our word. We treat each other with respect, and do what is right even when no one is looking.'
     },
     {
@@ -1263,7 +1346,7 @@ function panelJourney() {
       title: 'We Keep Going & Get Things Done — Together',
       icon: 'ti-flame',
       color: '#C43B28',
-      colorSoft: '#FEF0ED',
+      colorSoft: 'rgba(196,59,40,0.13)',
       body: 'When we say yes, we mean it. When things get tough, we don\'t give up. We commit & follow-through with passion, perseverance & teamwork.'
     },
     {
@@ -1271,7 +1354,7 @@ function panelJourney() {
       title: 'We Strive to Make Things Better',
       icon: 'ti-plant-2',
       color: '#1A7A3A',
-      colorSoft: '#E6F5EC',
+      colorSoft: 'rgba(26,122,58,0.14)',
       body: 'We stay curious and dare to do things differently. We are not afraid to try new things and leverage technologies. We ask questions, improve what we can and look for chances to grow.'
     }
   ];
@@ -1378,7 +1461,7 @@ function panelJourney() {
       </div>`).join('')}
     </div>
     <!-- Closing statement -->
-    <div style="background:linear-gradient(135deg,#FDF0ED,#FEF5F3);border:1px solid rgba(232,85,62,0.15);border-radius:var(--radius-lg);padding:18px 22px;display:flex;align-items:center;gap:14px">
+    <div style="background:linear-gradient(135deg,var(--soft-a),var(--soft-b));border:1px solid rgba(232,85,62,0.15);border-radius:var(--radius-lg);padding:18px 22px;display:flex;align-items:center;gap:14px">
       <i class="ti ti-heart-handshake" style="font-size:28px;color:var(--coral);flex-shrink:0" aria-hidden="true"></i>
       <div style="font-size:13px;color:var(--text2);line-height:1.65">Living out these three core values builds a culture of <strong style="color:var(--text)">Trust, Resilience & Growth</strong> — one where people are not just productive but deeply connected to one another and proud of their work.</div>
     </div>
@@ -1486,7 +1569,7 @@ function panelVideos() {
   function catBanner(label, total, done, isRequired) {
     const pct = total > 0 ? Math.round((done / total) * 100) : 0;
     const barColor = isRequired ? 'var(--red-text)' : 'var(--gray-text)';
-    const bgColor  = isRequired ? '#FFF0EE' : 'var(--gray-bg)';
+    const bgColor  = isRequired ? 'var(--req-bg)' : 'var(--gray-bg)';
     const textColor= isRequired ? 'var(--red-text)' : 'var(--gray-text)';
     const icon     = isRequired ? 'ti-alert-circle' : 'ti-circle-check';
     return `
@@ -1615,7 +1698,7 @@ function panelVideos() {
         : 'No employees yet';
       return `
       <div class="vid-card-item" onclick="openModal('video','${v.title.replace(/'/g,"\\'")}')">
-        <div style="width:40px;height:40px;border-radius:10px;background:${isRequired?'#FFF0EE':'var(--gray-bg)'};display:flex;align-items:center;justify-content:center;flex-shrink:0">
+        <div style="width:40px;height:40px;border-radius:10px;background:${isRequired?'var(--req-bg)':'var(--gray-bg)'};display:flex;align-items:center;justify-content:center;flex-shrink:0">
           <i class="ti ti-player-play" style="font-size:16px;color:${isRequired?'var(--red-text)':'var(--gray-text)'}" aria-hidden="true"></i>
         </div>
         <div class="row-main" style="min-width:0">
@@ -2851,20 +2934,24 @@ function panelSettings() {
     : `<div class="section-title" style="margin-top:4px">Pending access requests</div>
        <div style="font-size:13px;color:var(--text3);margin-bottom:14px;padding:14px;background:var(--bg2);border-radius:var(--radius);text-align:center">No pending requests.</div>`;
 
-  const approvedHTML = USER_REGISTRY.filter(u => u.role !== 'admin').length
-    ? `<div class="section-title" style="margin-top:4px">Approved users</div>
+  const others = USER_REGISTRY.filter(u => !(currentUser && u.username === currentUser.username));
+  const approvedHTML = others.length
+    ? `<div class="section-title" style="margin-top:4px">Users &amp; access levels</div>
       <div class="card" style="margin-bottom:14px">
-        ${USER_REGISTRY.filter(u=>u.role!=='admin').map((u, i) => `
+        ${others.map((u, i) => `
         <div class="card-row" id="urow-${u.username}">
           <div class="avatar" style="width:30px;height:30px;font-size:11px;flex-shrink:0">${u.initials}</div>
           <div class="row-main">
             <div class="row-title">${u.name}</div>
-            <div class="row-sub">@${u.username} · ${u.email} · ${u.role}</div>
+            <div class="row-sub">@${u.username} · ${u.email}${u.mustChangePassword ? ' · <span style="color:var(--amber-text)">must change password at next sign-in</span>' : ''}</div>
           </div>
+          <select title="Access level" onchange="changeUserRole('${u.username}', this.value)" style="font-size:12px;padding:4px 8px;border-radius:var(--radius);border:0.5px solid var(--border2);background:var(--bg);color:var(--text);font-family:inherit;margin-right:6px">
+            ${Object.keys(ROLES).map(r => `<option value="${r}" ${u.role === r ? 'selected' : ''}>${ROLES[r].label}</option>`).join('')}
+          </select>
           <button class="section-title-btn" style="font-size:11px;padding:3px 10px" onclick="startEditUser('${u.username}')">
             <i class="ti ti-key" style="font-size:12px;vertical-align:-1px" aria-hidden="true"></i> Reset password
           </button>
-          ${currentRole === 'admin' && u.username !== 'hr' && !(currentUser && currentUser.username === u.username) ? `
+          ${currentRole === 'admin' ? `
           <button class="section-title-btn" style="font-size:11px;padding:3px 10px;margin-left:6px;color:var(--red-text);border-color:var(--red-text)" onclick="removeUser('${u.username}')">
             <i class="ti ti-user-x" style="font-size:12px;vertical-align:-1px" aria-hidden="true"></i> Remove
           </button>` : ''}
@@ -2964,7 +3051,7 @@ function removeUser(username) {
   if (currentRole !== 'admin') { toast('Only Admin can remove users'); return; }
   const user = USER_REGISTRY.find(u => u.username === username);
   if (!user) return;
-  if (user.role === 'admin' || username === 'hr') { toast('Built-in accounts can\'t be removed'); return; }
+  if (user.role === 'admin' && USER_REGISTRY.filter(x => x.role === 'admin').length <= 1) { toast('There must always be at least one Admin'); return; }
   if (currentUser && currentUser.username === username) { toast('You can\'t remove your own account'); return; }
   if (!confirm(`Remove ${user.name} (@${user.username})?\n\nThis permanently deletes their account and their video progress, exam results, personality test result and retake requests. They will no longer be able to sign in. This can't be undone.`)) return;
   const purge = (arr) => { for (let i = arr.length - 1; i >= 0; i--) if (arr[i] && arr[i].username === username) arr.splice(i, 1); };
@@ -2999,7 +3086,7 @@ function saveUserPassword(username) {
   if (newPass.length < 6) { inp.focus(); toast('Password must be at least 6 characters'); return; }
   const user = USER_REGISTRY.find(u => u.username === username);
   if (!user) return;
-  user.password = newPass;
+  setUserPassword(user, newPass);
   logAudit('Users', 'Reset password', `${user.name} (@${user.username})`);
   document.getElementById(`uedit-${username}`).style.display = 'none';
   toast(`Password updated for ${user.name}`);
@@ -3646,8 +3733,7 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal()
 
 /* ── Auth functions ── */
 function showTab(tab) {
-  document.getElementById('login-form').style.display    = tab==='login'    ? '' : 'none';
-  document.getElementById('register-form').style.display = tab==='register' ? '' : 'none';
+  setAuthMode(tab);
   document.getElementById('tab-login').classList.toggle('active',    tab==='login');
   document.getElementById('tab-register').classList.toggle('active', tab==='register');
   document.getElementById('login-err').classList.remove('show');
@@ -3867,8 +3953,6 @@ function loadData(silent) {
   } catch(e) { console.warn('loadData error', e); }
 }
 
-// Built-in accounts that always exist even before anything is saved.
-const SEED_USERS = USER_REGISTRY.map(u => ({ ...u }));
 function replaceArray(arr, items) { arr.length = 0; (items || []).forEach(x => arr.push(x)); }
 
 // Applies a saved snapshot (from this browser's storage, another tab, or the cloud) EXACTLY as
@@ -3878,9 +3962,7 @@ function applySnapshot(d, silent) {
   _restoring = true;
   try {
     if (Array.isArray(d.userRegistry)) {
-      const list = d.userRegistry.slice();
-      SEED_USERS.forEach(su => { if (!list.some(u => u.username === su.username)) list.unshift({ ...su }); });
-      replaceArray(USER_REGISTRY, list);
+      replaceArray(USER_REGISTRY, d.userRegistry.slice());
       // keep the signed-in user object pointing at the fresh record
       if (currentUser) {
         const me = USER_REGISTRY.find(u => u.username === currentUser.username);
@@ -3888,6 +3970,10 @@ function applySnapshot(d, silent) {
       }
     }
     if (Array.isArray(d.pendingUsers)) replaceArray(PENDING_USERS, d.pendingUsers.filter(p => !USER_REGISTRY.some(u => u.username === p.username)));
+    // Plain-text passwords from older saves are hashed straight away (and saved back, so the plain
+    // text disappears from this browser and the cloud too).
+    if (migratePasswords(USER_REGISTRY) | migratePasswords(PENDING_USERS)) setTimeout(() => saveData(), 0);
+    setTimeout(() => { if (typeof refreshAuthScreen === 'function') refreshAuthScreen(); }, 0);
     if (Array.isArray(d.auditLog)) replaceArray(AUDIT_LOG, d.auditLog);
     if (Array.isArray(d.notifications)) replaceArray(NOTIFICATIONS, d.notifications.slice().sort((a, b) => (Number(a.id) || 0) - (Number(b.id) || 0)));
     if (Array.isArray(d.assessmentResults)) replaceArray(ASSESSMENT_RESULTS, d.assessmentResults);
@@ -4256,6 +4342,7 @@ async function cloudPull() {
     if (data && (data.c || data.v)) applyCloudData(data);
     else _cloudBase = { c: {}, v: {} };          // first-ever run: the push below seeds the cloud from this browser
     _cloudPulled = true;
+    refreshAuthScreen();
     updateSyncBadge('synced', new Date().toLocaleTimeString());
     cloudPush();
     cloudQueueUploads();
@@ -4414,7 +4501,7 @@ function restoreSession() {
     if (!raw) return false;
     const { username } = JSON.parse(raw);
     const user = USER_REGISTRY.find(u => u.username === username && (u.status === 'approved' || !u.status));
-    if (!user) return false;
+    if (!user || user.mustChangePassword) return false;
     currentUser = user;
     currentRole = user.role;
     document.getElementById('user-avatar').textContent = user.initials;
@@ -4890,6 +4977,149 @@ function rejectRetake(retakeId) {
   if (currentPanel === 'assessments') renderPanel('assessments');
 }
 
+/* ── Passwords ──
+   No passwords are written into this file. Each account's password is stored only as a salted
+   SHA-256 hash (passSalt + passHash) — never as plain text — in this browser and in the cloud. */
+function sha256Hex(ascii) {
+  // compact SHA-256 (UTF-8 safe), synchronous so it works everywhere incl. file:// pages
+  const utf8 = unescape(encodeURIComponent(ascii));
+  const K = [], H = [], isPrime = n => { for (let f = 2; f * f <= n; f++) if (n % f === 0) return false; return true; };
+  for (let n = 2, c = 0; c < 64; n++) if (isPrime(n)) { if (c < 8) H[c] = (Math.pow(n, 1 / 2) * 4294967296) | 0; K[c++] = (Math.pow(n, 1 / 3) * 4294967296) | 0; }
+  const words = [], bitLen = utf8.length * 8;
+  let s = utf8 + '\x80'; while (s.length % 64 - 56) s += '\x00';
+  for (let i = 0; i < s.length; i++) words[i >> 2] |= s.charCodeAt(i) << ((3 - i) % 4) * 8;
+  words[words.length] = (bitLen / 4294967296) | 0; words[words.length] = bitLen;
+  const rr = (v, n) => (v >>> n) | (v << (32 - n));
+  let hash = H.slice(0, 8);
+  for (let j = 0; j < words.length;) {
+    const w = words.slice(j, j += 16), old = hash.slice(0);
+    for (let i = 0; i < 64; i++) {
+      const w15 = w[i - 15], w2 = w[i - 2], a = hash[0], e = hash[4];
+      const t1 = hash[7] + (rr(e, 6) ^ rr(e, 11) ^ rr(e, 25)) + ((e & hash[5]) ^ (~e & hash[6])) + K[i] +
+        (w[i] = i < 16 ? w[i] : (w[i - 16] + (rr(w15, 7) ^ rr(w15, 18) ^ (w15 >>> 3)) + w[i - 7] + (rr(w2, 17) ^ rr(w2, 19) ^ (w2 >>> 10))) | 0);
+      const t2 = (rr(a, 2) ^ rr(a, 13) ^ rr(a, 22)) + ((a & hash[1]) ^ (a & hash[2]) ^ (hash[1] & hash[2]));
+      hash = [(t1 + t2) | 0].concat(hash); hash[4] = (hash[4] + t1) | 0; hash.length = 8;
+    }
+    for (let i = 0; i < 8; i++) hash[i] = (hash[i] + old[i]) | 0;
+  }
+  return hash.map(x => ('00000000' + (x >>> 0).toString(16)).slice(-8)).join('');
+}
+function makePasswordFields(pass) {
+  const salt = Array.from({ length: 4 }, () => Math.random().toString(36).slice(2, 10)).join('');
+  return { passSalt: salt, passHash: sha256Hex(salt + '|' + pass) };
+}
+function setUserPassword(user, pass) {
+  Object.assign(user, makePasswordFields(pass));
+  delete user.password;
+}
+function checkPassword(user, pass) {
+  if (!user) return false;
+  if (user.passHash) return sha256Hex((user.passSalt || '') + '|' + pass) === user.passHash;
+  return false;
+}
+// Older saved data kept passwords as plain text, and the original demo accounts used published
+// passwords. Plain text is converted to a hash right away; demo passwords must be changed at next sign-in.
+// SHA-256 fingerprints of the two retired demo passwords (the passwords themselves are not in this file)
+const RETIRED_DEFAULT_HASHES = ['240be518fabd2724ddb6f04eeb1da5967448d7e831c08c8fa822809f74c720a9', '070a3b5e8d4bd5c46acccb91c9c54614c0cd649e78c4c4719e3a64270bae5ddf'];
+const isRetiredPassword = p => RETIRED_DEFAULT_HASHES.includes(sha256Hex(p));
+function migratePasswords(list) {
+  let changed = false;
+  (list || []).forEach(u => {
+    if (u && typeof u.password === 'string') {
+      if (isRetiredPassword(u.password)) u.mustChangePassword = true;
+      setUserPassword(u, u.password);
+      changed = true;
+    }
+  });
+  return changed;
+}
+function hasAdminAccount() { return USER_REGISTRY.some(u => u.role === 'admin' && u.status !== 'rejected'); }
+
+/* ── Auth screen modes: sign in / register, first-time Admin set-up, forced password change ── */
+function setAuthMode(mode) {
+  const show = (id, on) => { const el = document.getElementById(id); if (el) el.style.display = on ? '' : 'none'; };
+  const tabs = document.querySelector('.auth-tab');
+  if (tabs) tabs.style.display = (mode === 'login' || mode === 'register') ? '' : 'none';
+  show('login-form', mode === 'login'); show('register-form', mode === 'register');
+  show('setup-form', mode === 'setup'); show('changepw-form', mode === 'changepw');
+  const sub = document.getElementById('auth-sub');
+  if (sub) sub.textContent = mode === 'setup' ? 'First-time set-up — create the Administrator account.'
+    : mode === 'changepw' ? 'Please set a new password to continue.'
+    : 'Your HR onboarding hub — sign in to get started.';
+}
+// Shows the one-time "create Admin" screen only when no Admin exists anywhere yet. With cloud sync
+// set up it waits for the cloud first, so a second device never creates a duplicate Admin.
+function refreshAuthScreen() {
+  if (currentUser || document.getElementById('auth-screen').classList.contains('hidden')) return;
+  const cloudKnown = !firebaseReady() || _cloudPulled;
+  const mode = document.getElementById('setup-form').style.display !== 'none' ? 'setup' : null;
+  if (!hasAdminAccount() && cloudKnown) setAuthMode('setup');
+  else if (mode === 'setup') setAuthMode('login');
+}
+function createFirstAdmin() {
+  const g = id => document.getElementById(id).value.trim();
+  const name = g('su-name'), email = g('su-email').toLowerCase(), username = g('su-username').toLowerCase().replace(/\s+/g, '');
+  const pass = document.getElementById('su-password').value, pass2 = document.getElementById('su-password2').value;
+  if (hasAdminAccount()) { setAuthMode('login'); return showErr('login-err', 'An Admin account already exists — please sign in.'); }
+  if (!name) return showErr('setup-err', 'Please enter your full name.');
+  if (!email.includes('@')) return showErr('setup-err', 'Please enter a valid email.');
+  if (username.length < 3 || !/^[a-z0-9_]+$/.test(username)) return showErr('setup-err', 'Username: at least 3 characters — letters, numbers and underscores only.');
+  if (pass.length < 8) return showErr('setup-err', 'Password must be at least 8 characters.');
+  if (pass !== pass2) return showErr('setup-err', 'The two passwords don\'t match.');
+  const initials = name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
+  const user = { name, username, email, dept: 'Administration', role: 'admin', initials, status: 'approved', createdAt: new Date().toLocaleString() };
+  setUserPassword(user, pass);
+  USER_REGISTRY.push(user);
+  logAudit('Users', 'Created Administrator account (first-time set-up)', `${name} (@${username})`, { name, username, role: 'admin' });
+  saveData(true);
+  ['su-name', 'su-email', 'su-username', 'su-password', 'su-password2'].forEach(id => document.getElementById(id).value = '');
+  enterApp(user);
+  toast('Administrator account created');
+}
+let _pwChangeUser = null;
+function saveForcedPasswordChange() {
+  const p1 = document.getElementById('cp-password').value, p2 = document.getElementById('cp-password2').value;
+  if (!_pwChangeUser) { setAuthMode('login'); return; }
+  if (p1.length < 8) return showErr('changepw-err', 'Password must be at least 8 characters.');
+  if (isRetiredPassword(p1)) return showErr('changepw-err', 'Please choose a different password.');
+  if (p1 !== p2) return showErr('changepw-err', 'The two passwords don\'t match.');
+  setUserPassword(_pwChangeUser, p1);
+  delete _pwChangeUser.mustChangePassword;
+  logAudit('Account', 'Changed password', `${_pwChangeUser.name} (@${_pwChangeUser.username})`, { name: _pwChangeUser.name, username: _pwChangeUser.username, role: _pwChangeUser.role });
+  saveData(true);
+  const u = _pwChangeUser; _pwChangeUser = null;
+  document.getElementById('cp-password').value = ''; document.getElementById('cp-password2').value = '';
+  enterApp(u);
+  toast('Password updated');
+}
+function enterApp(user) {
+  currentUser = user;
+  currentRole = user.role;
+  logAudit('Account', 'Signed in', `${user.name} (@${user.username}) · ${ROLES[user.role].label}`);
+  document.getElementById('user-avatar').textContent = user.initials;
+  document.getElementById('sidebar-user-label').textContent = user.name + ' · ' + ROLES[user.role].label;
+  document.getElementById('auth-screen').classList.add('hidden');
+  document.getElementById('main-app').style.display = 'flex';
+  setAuthMode('login');
+  saveSession(); // persist login for reload
+  const first = ROLES[currentRole].nav[0];
+  renderNav(first);
+  renderPanel(first);
+  updateBell();
+}
+// Admin: change someone's access level (Employee / Manager / HR / Admin)
+function changeUserRole(username, role) {
+  if (currentRole !== 'admin') { toast('Only Admin can change access levels'); return; }
+  const u = USER_REGISTRY.find(x => x.username === username);
+  if (!u || !ROLES[role] || u.role === role) return;
+  if (u.role === 'admin' && USER_REGISTRY.filter(x => x.role === 'admin').length <= 1) { toast('There must always be at least one Admin'); renderPanel('settings'); return; }
+  logAudit('Users', 'Changed access level', `${u.name} (@${u.username}) · ${ROLES[u.role].label} → ${ROLES[role].label}`);
+  u.role = role;
+  saveData(true);
+  toast(`${u.name} is now ${ROLES[role].label}`);
+  renderPanel('settings');
+}
+
 function doLogin() {
   const usernameInput = document.getElementById('login-username');
   const passInput     = document.getElementById('login-password');
@@ -4919,7 +5149,7 @@ function doLogin() {
       return showErr('login-err', 'Your account is pending admin approval.');
     }
 
-    const user = approved && approved.password === pass ? approved : null;
+    const user = approved && checkPassword(approved, pass) ? approved : null;
     if (!user) {
       passInput.value = '';
       passInput.focus();
@@ -4928,21 +5158,9 @@ function doLogin() {
     }
     if (user.status === 'pending')  return showErr('login-err', 'Your account is pending admin approval.');
     if (user.status === 'rejected') return showErr('login-err', 'Your access request was declined. Contact your HR team.');
-
-    currentUser = user;
-    currentRole = user.role;
-    logAudit('Account', 'Signed in', `${user.name} (@${user.username}) · ${ROLES[user.role].label}`);
-    document.getElementById('user-avatar').textContent = user.initials;
-    document.getElementById('sidebar-user-label').textContent = user.name + ' · ' + ROLES[user.role].label;
-    document.getElementById('auth-screen').classList.add('hidden');
-    document.getElementById('main-app').style.display = 'flex';
-
-    saveSession(); // persist login for reload
-
-    const first = ROLES[currentRole].nav[0];
-    renderNav(first);
-    renderPanel(first);
-    updateBell();
+    passInput.value = '';
+    if (user.mustChangePassword) { _pwChangeUser = user; setAuthMode('changepw'); return; }
+    enterApp(user);
   });
 }
 
@@ -4966,7 +5184,7 @@ function doRegister() {
   if (allUsers.find(u => u.username === username))        return showErr('reg-err', 'That username is already taken. Please choose another.');
 
   const initials = name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
-  PENDING_USERS.push({ name, username, email, password: pass, dept: 'Unassigned', role: 'employee', initials, status: 'pending', requestedAt: new Date().toLocaleString() });
+  PENDING_USERS.push({ name, username, email, ...makePasswordFields(pass), dept: 'Unassigned', role: 'employee', initials, status: 'pending', requestedAt: new Date().toLocaleString() });
   logAudit('Account', 'Registered (awaiting approval)', `${name} (@${username}) · ${email}`, { name, username, role: 'employee' });
 
   // Push notification for admin
@@ -5000,6 +5218,7 @@ function doLogout() {
   document.getElementById('login-password').value = '';
   document.getElementById('login-err').classList.remove('show');
   showTab('login');
+  refreshAuthScreen();
 }
 
 /* ══════════════════════════════════════════════════════
@@ -5419,10 +5638,31 @@ function exportAll() {
 document.getElementById('login-password').addEventListener('keydown', e => { if(e.key==='Enter') doLogin(); });
 document.getElementById('login-username').addEventListener('keydown', e => { if(e.key==='Enter') doLogin(); });
 
+/* ── Day / Night mode ── */
+function isDarkTheme() {
+  const t = document.documentElement.getAttribute('data-theme');
+  if (t) return t === 'dark';
+  return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+}
+function syncThemeIcons() {
+  const dark = isDarkTheme();
+  document.querySelectorAll('.theme-ic').forEach(i => { i.className = 'ti ' + (dark ? 'ti-sun' : 'ti-moon') + ' theme-ic'; });
+  document.querySelectorAll('.theme-toggle').forEach(b => b.title = dark ? 'Switch to day mode' : 'Switch to night mode');
+}
+function toggleTheme() {
+  const next = isDarkTheme() ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', next);
+  try { localStorage.setItem('onboardiq_theme', next); } catch (e) {}
+  syncThemeIcons();
+}
+syncThemeIcons();
+if (window.matchMedia) { try { window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', syncThemeIcons); } catch (e) {} }
+
 /* ── Bootstrap ── */
 loadData();      // restore persisted data
 initSync();      // start real-time cross-tab sync
 cloudInit();     // Firebase: pull the shared data, then keep it live (no-op until FIREBASE_CONFIG is filled in)
+setTimeout(refreshAuthScreen, 120); // first-ever run with no Admin yet → show the Admin set-up screen
 // Try restoring previous session (page reload, tab reopen)
 setTimeout(() => {
   if (!restoreSession()) {
