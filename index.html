@@ -755,6 +755,7 @@
         <div class="auth-field"><label>Password</label><input id="su-password" type="password" placeholder="At least 8 characters" autocomplete="new-password"></div>
         <div class="auth-field"><label>Confirm password</label><input id="su-password2" type="password" placeholder="Type it again" autocomplete="new-password"></div>
         <div class="auth-err" id="setup-err"></div>
+        <p style="font-size:11.5px;color:var(--text3);line-height:1.5;margin-top:8px">Already created the Admin account on another computer? Open this page on <b>that</b> computer first (press Ctrl+F5) — it will upload the account, and this screen will change to Sign in.</p>
       </div>
       <div class="auth-foot">
         <button class="auth-btn auth-btn-primary" onclick="createFirstAdmin()">Create Admin account</button>
@@ -4325,6 +4326,7 @@ async function cloudPush() {
       _cloudBase = ls;
     }
     _syncedSeq = seq;
+    markCloudLinked();
     updateSyncBadge('synced', new Date().toLocaleTimeString());
     if (_remoteWaiting && _localSeq === _syncedSeq) { _remoteWaiting = false; const snap = await _fbData.once('value'); applyCloudData(snap.val()); }
   } catch (err) {
@@ -4342,13 +4344,18 @@ async function cloudPull() {
     try { ADMIN_CLAIM = (await _fbRoot.child('adminClaim').once('value')).val(); } catch (e) {}
     const snap = await _fbData.once('value');
     const data = snap.val();
-    if (data && (data.c || data.v)) applyCloudData(data);
-    // Older installs: record the one existing Admin as the claimed Admin slot
+    const firstLink = (() => { try { return localStorage.getItem(CLOUD_LINK_KEY) !== FIREBASE_CONFIG.databaseURL; } catch (e) { return true; } })();
+    if (data && (data.c || data.v)) {
+      if (firstLink) mergeLocalIntoCloud(data);   // this browser's first time online: keep what it had saved offline
+      else applyCloudData(data);
+    } else {
+      _cloudBase = { c: {}, v: {} };             // empty cloud: the push below seeds it from this browser
+    }
+    // Record the one existing Admin as the claimed Admin slot (installs set up before the claim existed)
     if (!ADMIN_CLAIM) {
       const admins = USER_REGISTRY.filter(u => u.role === 'admin');
       if (admins.length === 1) { ADMIN_CLAIM = { username: admins[0].username, at: Date.now() }; _fbRoot.child('adminClaim').set(ADMIN_CLAIM).catch(() => {}); }
     }
-    else _cloudBase = { c: {}, v: {} };          // first-ever run: the push below seeds the cloud from this browser
     _cloudPulled = true;
     refreshAuthScreen();
     updateSyncBadge('synced', new Date().toLocaleTimeString());
@@ -4361,6 +4368,37 @@ async function cloudPull() {
     return false;
   }
 }
+// The first time a browser connects to the cloud, anything it saved while offline (for example
+// an Admin account created before sync was switched on) is ADDED to the cloud instead of being
+// replaced by it. Where both have the same record, the cloud's copy wins. After this first
+// connection, the cloud is always the source of truth.
+const CLOUD_LINK_KEY = 'onboardiq_cloud_link';
+function mergeLocalIntoCloud(data) {
+  const cloud = cloudToSnapshot(data);
+  const local = buildSnapshot();
+  const merged = { ...cloud };
+  Object.keys(CLOUD_KEYED).forEach(coll => {
+    const keyOf = CLOUD_KEYED[coll];
+    const have = new Set((cloud[coll] || []).map(r => String(keyOf(r))));
+    merged[coll] = (cloud[coll] || []).concat((local[coll] || []).filter(r => { const k = keyOf(r); return k != null && k !== '' && !have.has(String(k)); }));
+  });
+  const emptyV = v => v == null || (Array.isArray(v) && !v.length);
+  ['examLibrary', 'departments', 'formLibraryMeta'].forEach(n => { if (emptyV(cloud[n]) && !emptyV(local[n])) merged[n] = local[n]; });
+  const vKey = v => v.fileId || v.title;
+  const cloudVids = cloud.videoLibraryMeta || [];
+  merged.videoLibraryMeta = cloudVids.concat((local.videoLibraryMeta || []).filter(v => !cloudVids.some(c => vKey(c) === vKey(v))));
+  if (!cloud.welcomeVideoMeta && local.welcomeVideoMeta) merged.welcomeVideoMeta = local.welcomeVideoMeta;
+  _applyingRemote = true;
+  try {
+    applySnapshot(merged, true);
+    enforceSingleAdmin();
+    _cloudBase = shapeStrings({ c: (data && data.c) || {}, v: (data && data.v) || {} }); // so the local-only records get pushed
+    saveData(true);
+  } finally { _applyingRemote = false; }
+  cloudFetchMissingFiles();
+}
+function markCloudLinked() { try { localStorage.setItem(CLOUD_LINK_KEY, FIREBASE_CONFIG.databaseURL); } catch (e) {} }
+
 // Used by sign-in: fetch the latest accounts first (with a time limit) so a just-approved
 // registrant can sign in from any device.
 function cloudPullNow(timeoutMs) {
