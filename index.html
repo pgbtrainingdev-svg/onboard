@@ -737,7 +737,7 @@
     <!-- Login form -->
     <div id="login-form">
       <div class="auth-body">
-        <div class="auth-field"><label>Username</label><input id="login-username" type="text" placeholder="Your username" autocomplete="username"></div>
+        <div class="auth-field"><label>Username or email</label><input id="login-username" type="text" placeholder="Your username or email" autocomplete="username"></div>
         <div class="auth-field"><label>Password</label><input id="login-password" type="password" placeholder="Password" autocomplete="current-password"></div>
         <div class="auth-err" id="login-err"></div>
       </div>
@@ -759,18 +759,6 @@
       </div>
       <div class="auth-foot">
         <button class="auth-btn auth-btn-primary" onclick="createFirstAdmin()">Create Admin account</button>
-      </div>
-    </div>
-
-    <!-- Forced password change (accounts that still use a retired default password) -->
-    <div id="changepw-form" style="display:none">
-      <div class="auth-body">
-        <div class="auth-field"><label>New password</label><input id="cp-password" type="password" placeholder="At least 8 characters" autocomplete="new-password"></div>
-        <div class="auth-field"><label>Confirm new password</label><input id="cp-password2" type="password" placeholder="Type it again" autocomplete="new-password"></div>
-        <div class="auth-err" id="changepw-err"></div>
-      </div>
-      <div class="auth-foot">
-        <button class="auth-btn auth-btn-primary" onclick="saveForcedPasswordChange()">Save new password</button>
       </div>
     </div>
 
@@ -815,7 +803,7 @@
           <i class="ti ti-bell" aria-hidden="true"></i>
           <span id="bell-badge" style="display:none;position:absolute;top:-5px;right:-5px;min-width:17px;height:17px;padding:0 4px;background:var(--red-text);color:#fff;border-radius:9px;font-size:10px;font-weight:700;line-height:17px;text-align:center;box-shadow:0 0 0 2px var(--bg)"></span>
         </button>
-        <div class="avatar" id="user-avatar" title="Current user">AD</div>
+        <div class="avatar" id="user-avatar" title="My account — change password" role="button" tabindex="0" style="cursor:pointer" onclick="openChangeMyPassword()" onkeydown="if(event.key==='Enter')openChangeMyPassword()">AD</div>
         <button class="topbar-btn" onclick="doLogout()" aria-label="Sign out" title="Sign out">
           <i class="ti ti-logout" aria-hidden="true"></i>
         </button>
@@ -2944,7 +2932,7 @@ function panelSettings() {
           <div class="avatar" style="width:30px;height:30px;font-size:11px;flex-shrink:0">${u.initials}</div>
           <div class="row-main">
             <div class="row-title">${u.name}</div>
-            <div class="row-sub">@${u.username} · ${u.email}${u.mustChangePassword ? ' · <span style="color:var(--amber-text)">must change password at next sign-in</span>' : ''}</div>
+            <div class="row-sub">@${u.username} · ${u.email}</div>
           </div>
           <select title="Access level" onchange="changeUserRole('${u.username}', this.value)" style="font-size:12px;padding:4px 8px;border-radius:var(--radius);border:0.5px solid var(--border2);background:var(--bg);color:var(--text);font-family:inherit;margin-right:6px">
             ${Object.keys(ROLES).filter(r => r !== 'admin').map(r => `<option value="${r}" ${u.role === r ? 'selected' : ''}>${ROLES[r].label}</option>`).join('')}
@@ -3974,7 +3962,9 @@ function applySnapshot(d, silent) {
     if (Array.isArray(d.pendingUsers)) replaceArray(PENDING_USERS, d.pendingUsers.filter(p => !USER_REGISTRY.some(u => u.username === p.username)));
     // Plain-text passwords from older saves are hashed straight away (and saved back, so the plain
     // text disappears from this browser and the cloud too).
-    if (migratePasswords(USER_REGISTRY) | migratePasswords(PENDING_USERS) | enforceSingleAdmin()) setTimeout(() => saveData(), 0);
+    let flagsCleared = false;
+    USER_REGISTRY.forEach(u => { if ('mustChangePassword' in u) { delete u.mustChangePassword; flagsCleared = true; } });
+    if (migratePasswords(USER_REGISTRY) | migratePasswords(PENDING_USERS) | enforceSingleAdmin() | flagsCleared) setTimeout(() => saveData(), 0);
     setTimeout(() => { if (typeof refreshAuthScreen === 'function') refreshAuthScreen(); }, 0);
     if (Array.isArray(d.auditLog)) replaceArray(AUDIT_LOG, d.auditLog);
     if (Array.isArray(d.notifications)) replaceArray(NOTIFICATIONS, d.notifications.slice().sort((a, b) => (Number(a.id) || 0) - (Number(b.id) || 0)));
@@ -4382,6 +4372,11 @@ function mergeLocalIntoCloud(data) {
     const have = new Set((cloud[coll] || []).map(r => String(keyOf(r))));
     merged[coll] = (cloud[coll] || []).concat((local[coll] || []).filter(r => { const k = keyOf(r); return k != null && k !== '' && !have.has(String(k)); }));
   });
+  // A password changed on this device while it was offline must not be undone by an older cloud copy
+  merged.userRegistry = merged.userRegistry.map(cu => {
+    const lu = (local.userRegistry || []).find(x => x.username === cu.username);
+    return (lu && (lu.pwChangedAt || 0) > (cu.pwChangedAt || 0)) ? { ...cu, passSalt: lu.passSalt, passHash: lu.passHash, pwChangedAt: lu.pwChangedAt } : cu;
+  });
   const emptyV = v => v == null || (Array.isArray(v) && !v.length);
   ['examLibrary', 'departments', 'formLibraryMeta'].forEach(n => { if (emptyV(cloud[n]) && !emptyV(local[n])) merged[n] = local[n]; });
   const vKey = v => v.fileId || v.title;
@@ -4547,7 +4542,7 @@ function restoreSession() {
     if (!raw) return false;
     const { username } = JSON.parse(raw);
     const user = USER_REGISTRY.find(u => u.username === username && (u.status === 'approved' || !u.status));
-    if (!user || user.mustChangePassword) return false;
+    if (!user) return false;
     currentUser = user;
     currentRole = user.role;
     document.getElementById('user-avatar').textContent = user.initials;
@@ -5056,24 +5051,30 @@ function makePasswordFields(pass) {
 }
 function setUserPassword(user, pass) {
   Object.assign(user, makePasswordFields(pass));
+  user.pwChangedAt = Date.now();
   delete user.password;
+}
+// Finds an account by username, email, or (if unique) full name — people often forget which
+// username they chose when registering.
+function findAccount(list, login) {
+  const q = String(login || '').trim().toLowerCase();
+  if (!q) return null;
+  return list.find(u => (u.username || '').toLowerCase() === q)
+      || list.find(u => (u.email || '').toLowerCase() === q)
+      || (() => { const m = list.filter(u => (u.name || '').trim().toLowerCase() === q); return m.length === 1 ? m[0] : null; })();
 }
 function checkPassword(user, pass) {
   if (!user) return false;
   if (user.passHash) return sha256Hex((user.passSalt || '') + '|' + pass) === user.passHash;
   return false;
 }
-// Older saved data kept passwords as plain text, and the original demo accounts used published
-// passwords. Plain text is converted to a hash right away; demo passwords must be changed at next sign-in.
-// SHA-256 fingerprints of the two retired demo passwords (the passwords themselves are not in this file)
-const RETIRED_DEFAULT_HASHES = ['240be518fabd2724ddb6f04eeb1da5967448d7e831c08c8fa822809f74c720a9', '070a3b5e8d4bd5c46acccb91c9c54614c0cd649e78c4c4719e3a64270bae5ddf'];
-const isRetiredPassword = p => RETIRED_DEFAULT_HASHES.includes(sha256Hex(p));
+// Older saved data kept passwords as plain text — it is converted to a hash right away (same password).
 function migratePasswords(list) {
   let changed = false;
   (list || []).forEach(u => {
     if (u && typeof u.password === 'string') {
-      if (isRetiredPassword(u.password)) u.mustChangePassword = true;
-      setUserPassword(u, u.password);
+      Object.assign(u, makePasswordFields(u.password));   // same password, just stored safely (no pwChangedAt)
+      delete u.password;
       changed = true;
     }
   });
@@ -5104,19 +5105,27 @@ function setAuthMode(mode) {
   const tabs = document.querySelector('.auth-tab');
   if (tabs) tabs.style.display = (mode === 'login' || mode === 'register') ? '' : 'none';
   show('login-form', mode === 'login'); show('register-form', mode === 'register');
-  show('setup-form', mode === 'setup'); show('changepw-form', mode === 'changepw');
+  show('setup-form', mode === 'setup');
   const sub = document.getElementById('auth-sub');
   if (sub) sub.textContent = mode === 'setup' ? 'First-time set-up — create the Administrator account.'
-    : mode === 'changepw' ? 'Please set a new password to continue.'
     : 'Your HR onboarding hub — sign in to get started.';
 }
 // Shows the one-time "create Admin" screen only when no Admin exists anywhere yet. With cloud sync
 // set up it waits for the cloud first, so a second device never creates a duplicate Admin.
+const ADMIN_SEEN_KEY = 'onboardiq_admin_exists';
+function adminKnownToExist() {
+  if (hasAdminAccount()) { try { localStorage.setItem(ADMIN_SEEN_KEY, '1'); } catch (e) {} return true; }
+  if (ADMIN_CLAIM && ADMIN_CLAIM.username) return true;
+  try { if (localStorage.getItem(ADMIN_SEEN_KEY) === '1') return true; } catch (e) {}
+  return false;
+}
 function refreshAuthScreen() {
   if (currentUser || document.getElementById('auth-screen').classList.contains('hidden')) return;
+  // With cloud sync on, only a successful read of the cloud can prove no Admin exists yet —
+  // until then (or if the cloud can't be reached) everyone just sees Sign in.
   const cloudKnown = !firebaseReady() || _cloudPulled;
   const mode = document.getElementById('setup-form').style.display !== 'none' ? 'setup' : null;
-  if (!hasAdminAccount() && cloudKnown) setAuthMode('setup');
+  if (!adminKnownToExist() && cloudKnown) setAuthMode('setup');
   else if (mode === 'setup') setAuthMode('login');
 }
 async function claimAdminSlot(username) {
@@ -5138,7 +5147,7 @@ async function claimAdminSlot(username) {
 async function createFirstAdmin() {
   const btn = document.querySelector('#setup-form .auth-btn-primary');
   if (firebaseReady() && !_cloudPulled) { await cloudPullNow(5000); }
-  if (hasAdminAccount()) { setAuthMode('login'); return showErr('login-err', 'An Admin account already exists — only one Admin is allowed. Please sign in or register.'); }
+  if (adminKnownToExist()) { setAuthMode('login'); return showErr('login-err', 'An Admin account already exists — only one Admin is allowed. Please sign in or register.'); }
   const g = id => document.getElementById(id).value.trim();
   const name = g('su-name'), email = g('su-email').toLowerCase(), username = g('su-username').toLowerCase().replace(/\s+/g, '');
   const pass = document.getElementById('su-password').value, pass2 = document.getElementById('su-password2').value;
@@ -5166,21 +5175,43 @@ async function createFirstAdmin() {
   enterApp(user);
   toast('Administrator account created');
 }
-let _pwChangeUser = null;
-function saveForcedPasswordChange() {
-  const p1 = document.getElementById('cp-password').value, p2 = document.getElementById('cp-password2').value;
-  if (!_pwChangeUser) { setAuthMode('login'); return; }
-  if (p1.length < 8) return showErr('changepw-err', 'Password must be at least 8 characters.');
-  if (isRetiredPassword(p1)) return showErr('changepw-err', 'Please choose a different password.');
-  if (p1 !== p2) return showErr('changepw-err', 'The two passwords don\'t match.');
-  setUserPassword(_pwChangeUser, p1);
-  delete _pwChangeUser.mustChangePassword;
-  logAudit('Account', 'Changed password', `${_pwChangeUser.name} (@${_pwChangeUser.username})`, { name: _pwChangeUser.name, username: _pwChangeUser.username, role: _pwChangeUser.role });
+// Passwords only ever change when the person does it themselves inside the platform
+// (My account → Change password) or when an Admin resets it in Settings.
+function openChangeMyPassword() {
+  if (!currentUser) return;
+  document.querySelector('.modal').style.width = '';
+  const fld = 'width:100%;font-size:13px;padding:8px 10px;border-radius:var(--radius);border:0.5px solid var(--border2);background:var(--bg);color:var(--text);font-family:inherit;outline:none';
+  const lbl = 'font-size:11px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;display:block;margin-bottom:5px';
+  document.getElementById('modal-body').innerHTML = `
+    <h3 style="font-size:15px;font-weight:700;margin-bottom:4px">My account</h3>
+    <p style="font-size:12px;color:var(--text3);margin-bottom:14px">${currentUser.name} · @${currentUser.username} · ${ROLES[currentRole].label}</p>
+    <div style="display:flex;flex-direction:column;gap:12px">
+      <div><label style="${lbl}">Current password</label><input id="mp-cur" type="password" autocomplete="current-password" style="${fld}"></div>
+      <div><label style="${lbl}">New password</label><input id="mp-new" type="password" autocomplete="new-password" placeholder="At least 8 characters" style="${fld}"></div>
+      <div><label style="${lbl}">Confirm new password</label><input id="mp-new2" type="password" autocomplete="new-password" style="${fld}"></div>
+      <div id="mp-err" style="font-size:12px;color:var(--red-text);min-height:16px"></div>
+    </div>
+    <div class="modal-btns">
+      <button class="topbar-btn" onclick="closeModal()">Cancel</button>
+      <button class="inline-btn" onclick="saveMyPassword()">Change password</button>
+    </div>`;
+  document.getElementById('modal-overlay').classList.add('open');
+}
+function saveMyPassword() {
+  const err = m => { document.getElementById('mp-err').textContent = m; };
+  const me = currentUser && USER_REGISTRY.find(x => x.username === currentUser.username);
+  if (!me) return err('Your account could not be found — please sign in again.');
+  const cur = document.getElementById('mp-cur').value, p1 = document.getElementById('mp-new').value, p2 = document.getElementById('mp-new2').value;
+  if (!checkPassword(me, cur)) return err('Your current password is not correct.');
+  if (p1.length < 8) return err('New password must be at least 8 characters.');
+  if (p1 !== p2) return err('The two new passwords don\'t match.');
+  setUserPassword(me, p1);
+  currentUser = me;
+  logAudit('Account', 'Changed own password', `${me.name} (@${me.username})`);
   saveData(true);
-  const u = _pwChangeUser; _pwChangeUser = null;
-  document.getElementById('cp-password').value = ''; document.getElementById('cp-password2').value = '';
-  enterApp(u);
-  toast('Password updated');
+  if (typeof cloudPush === 'function') { clearTimeout(_pushTimer); _localSeq++; cloudPush(); }
+  closeModal();
+  toast('Password changed — use it next time you sign in');
 }
 function enterApp(user) {
   currentUser = user;
@@ -5220,7 +5251,7 @@ function doLogin() {
   const pass     = passInput.value;
   errEl.classList.remove('show');
 
-  if (!username) { usernameInput.focus(); return showErr('login-err', 'Please enter your username.'); }
+  if (!username) { usernameInput.focus(); return showErr('login-err', 'Please enter your username or email.'); }
   if (!pass)     { passInput.focus();     return showErr('login-err', 'Please enter your password.'); }
 
   // Loading state
@@ -5233,8 +5264,8 @@ function doLogin() {
     if (btn) { btn.textContent = 'Sign in'; btn.disabled = false; }
 
     // An approved account always wins over an old "pending" entry for the same username.
-    const approved = USER_REGISTRY.find(u => (u.username || '').toLowerCase() === username);
-    const pendingUser = !approved ? PENDING_USERS.find(u => (u.username || '').toLowerCase() === username) : null;
+    const approved = findAccount(USER_REGISTRY, username);
+    const pendingUser = !approved ? findAccount(PENDING_USERS, username) : null;
     if (pendingUser) {
       if (pendingUser.status === 'rejected') return showErr('login-err', 'Your access request was declined. Contact your HR team.');
       return showErr('login-err', 'Your account is pending admin approval.');
@@ -5250,7 +5281,6 @@ function doLogin() {
     if (user.status === 'pending')  return showErr('login-err', 'Your account is pending admin approval.');
     if (user.status === 'rejected') return showErr('login-err', 'Your access request was declined. Contact your HR team.');
     passInput.value = '';
-    if (user.mustChangePassword) { _pwChangeUser = user; setAuthMode('changepw'); return; }
     enterApp(user);
   });
 }
@@ -5290,7 +5320,7 @@ function doRegister() {
   });
 
   const pending = document.getElementById('reg-pending');
-  pending.innerHTML = `<strong>Registration submitted.</strong><br>Your username: <strong>${username}</strong><br>An Admin will review your request. You can sign in once approved.`;
+  pending.innerHTML = `<strong>Registration submitted.</strong><br>Sign in later with your username <strong>${username}</strong> (or your email <strong>${email}</strong>) and the password you just chose.<br>An Admin will review your request — you can sign in as soon as it's approved.`;
   pending.classList.add('show');
   document.getElementById('reg-name').value     = '';
   document.getElementById('reg-email').value    = '';
