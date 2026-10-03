@@ -2946,7 +2946,7 @@ function panelSettings() {
             <div class="row-sub">@${u.username} · ${u.email}${u.mustChangePassword ? ' · <span style="color:var(--amber-text)">must change password at next sign-in</span>' : ''}</div>
           </div>
           <select title="Access level" onchange="changeUserRole('${u.username}', this.value)" style="font-size:12px;padding:4px 8px;border-radius:var(--radius);border:0.5px solid var(--border2);background:var(--bg);color:var(--text);font-family:inherit;margin-right:6px">
-            ${Object.keys(ROLES).map(r => `<option value="${r}" ${u.role === r ? 'selected' : ''}>${ROLES[r].label}</option>`).join('')}
+            ${Object.keys(ROLES).filter(r => r !== 'admin').map(r => `<option value="${r}" ${u.role === r ? 'selected' : ''}>${ROLES[r].label}</option>`).join('')}
           </select>
           <button class="section-title-btn" style="font-size:11px;padding:3px 10px" onclick="startEditUser('${u.username}')">
             <i class="ti ti-key" style="font-size:12px;vertical-align:-1px" aria-hidden="true"></i> Reset password
@@ -3026,6 +3026,7 @@ function approveUser(email) {
   const u = PENDING_USERS.splice(idx, 1)[0];
   u.status = 'approved';
   u.approvedAt = new Date().toLocaleString();
+  if (u.role === 'admin') u.role = 'employee';
   if (!USER_REGISTRY.some(x => x.username === u.username)) USER_REGISTRY.push(u);
   logAudit('Users', 'Approved access request', `${u.name} (@${u.username}) · ${u.email}`);
   toast(`${u.name} approved — they can now sign in`);
@@ -3972,7 +3973,7 @@ function applySnapshot(d, silent) {
     if (Array.isArray(d.pendingUsers)) replaceArray(PENDING_USERS, d.pendingUsers.filter(p => !USER_REGISTRY.some(u => u.username === p.username)));
     // Plain-text passwords from older saves are hashed straight away (and saved back, so the plain
     // text disappears from this browser and the cloud too).
-    if (migratePasswords(USER_REGISTRY) | migratePasswords(PENDING_USERS)) setTimeout(() => saveData(), 0);
+    if (migratePasswords(USER_REGISTRY) | migratePasswords(PENDING_USERS) | enforceSingleAdmin()) setTimeout(() => saveData(), 0);
     setTimeout(() => { if (typeof refreshAuthScreen === 'function') refreshAuthScreen(); }, 0);
     if (Array.isArray(d.auditLog)) replaceArray(AUDIT_LOG, d.auditLog);
     if (Array.isArray(d.notifications)) replaceArray(NOTIFICATIONS, d.notifications.slice().sort((a, b) => (Number(a.id) || 0) - (Number(b.id) || 0)));
@@ -4144,13 +4145,14 @@ function initSync() {
                   pay-as-you-go Blaze plan; it still includes a monthly no-cost allowance.
    ══════════════════════════════════════════════════════════════════════════════ */
 const FIREBASE_CONFIG = {
-  apiKey: "",
-  authDomain: "",
-  databaseURL: "",          // e.g. https://your-project-default-rtdb.asia-southeast1.firebasedatabase.app
-  projectId: "",
-  storageBucket: "",
-  messagingSenderId: "",
-  appId: ""
+  apiKey: "AIzaSyA2cRczqsK8cKpA4g_Lp3kCOcLZr7eg8Ok",
+  authDomain: "onboarding-339a6.firebaseapp.com",
+  databaseURL: "https://onboarding-339a6-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "onboarding-339a6",
+  storageBucket: "onboarding-339a6.firebasestorage.app",
+  messagingSenderId: "5411528852",
+  appId: "1:5411528852:web:7357fb879a6898413d1481",
+  measurementId: "G-8Q9MQXPSK8"
 };
 const FIREBASE_SYNC_PATH = "pgbOnboarding";   // node in the Realtime Database that holds this platform's data
 const FILE_STORAGE_MODE  = "database";        // 'database' (free plan) or 'storage' (Cloud Storage)
@@ -4337,9 +4339,15 @@ async function cloudPull() {
   await ensureFirebaseAuth();
   updateSyncBadge('syncing');
   try {
+    try { ADMIN_CLAIM = (await _fbRoot.child('adminClaim').once('value')).val(); } catch (e) {}
     const snap = await _fbData.once('value');
     const data = snap.val();
     if (data && (data.c || data.v)) applyCloudData(data);
+    // Older installs: record the one existing Admin as the claimed Admin slot
+    if (!ADMIN_CLAIM) {
+      const admins = USER_REGISTRY.filter(u => u.role === 'admin');
+      if (admins.length === 1) { ADMIN_CLAIM = { username: admins[0].username, at: Date.now() }; _fbRoot.child('adminClaim').set(ADMIN_CLAIM).catch(() => {}); }
+    }
     else _cloudBase = { c: {}, v: {} };          // first-ever run: the push below seeds the cloud from this browser
     _cloudPulled = true;
     refreshAuthScreen();
@@ -5034,6 +5042,23 @@ function migratePasswords(list) {
   return changed;
 }
 function hasAdminAccount() { return USER_REGISTRY.some(u => u.role === 'admin' && u.status !== 'rejected'); }
+// Only ONE Admin account may exist. If older data (or two devices setting up at the same moment)
+// ever produced more than one, the first-created Admin is kept and any others become HR Manager.
+let ADMIN_CLAIM = null; // {username} — the cloud's record of who the Admin is (see createFirstAdmin)
+function enforceSingleAdmin() {
+  const admins = USER_REGISTRY.filter(u => u.role === 'admin');
+  if (admins.length <= 1) return false;
+  const keep = (ADMIN_CLAIM && admins.find(a => a.username === ADMIN_CLAIM.username)) || admins[0];
+  admins.forEach(a => {
+    if (a === keep) return;
+    a.role = 'hr';
+    AUDIT_LOG.push({ id: 'a' + Date.now() + '_' + a.username, at: new Date().toISOString(), time: new Date().toLocaleString(),
+      category: 'Users', action: 'Extra Admin changed to HR Manager', detail: `${a.name} (@${a.username}) — only one Admin is allowed; @${keep.username} remains Admin`,
+      actor: 'System', actorUsername: '', actorRole: '' });
+  });
+  if (currentUser && currentUser.role !== 'admin' && currentRole === 'admin') { currentRole = currentUser.role; }
+  return true;
+}
 
 /* ── Auth screen modes: sign in / register, first-time Admin set-up, forced password change ── */
 function setAuthMode(mode) {
@@ -5056,7 +5081,26 @@ function refreshAuthScreen() {
   if (!hasAdminAccount() && cloudKnown) setAuthMode('setup');
   else if (mode === 'setup') setAuthMode('login');
 }
-function createFirstAdmin() {
+async function claimAdminSlot(username) {
+  if (!firebaseReady()) return true;                       // local-only: the check above is enough
+  try {
+    await ensureFirebaseAuth();
+    const ref = _fbRoot.child('adminClaim');
+    if (ref.transaction) {
+      const res = await ref.transaction(cur => (cur && cur.username) ? undefined : { username, at: Date.now() });
+      const val = res && res.snapshot && res.snapshot.val();
+      return !!(res && res.committed && val && val.username === username);
+    }
+    const cur = (await ref.once('value')).val();
+    if (cur && cur.username) return cur.username === username;
+    await ref.set({ username, at: Date.now() });
+    return true;
+  } catch (e) { console.warn('Admin claim failed', e); return false; }
+}
+async function createFirstAdmin() {
+  const btn = document.querySelector('#setup-form .auth-btn-primary');
+  if (firebaseReady() && !_cloudPulled) { await cloudPullNow(5000); }
+  if (hasAdminAccount()) { setAuthMode('login'); return showErr('login-err', 'An Admin account already exists — only one Admin is allowed. Please sign in or register.'); }
   const g = id => document.getElementById(id).value.trim();
   const name = g('su-name'), email = g('su-email').toLowerCase(), username = g('su-username').toLowerCase().replace(/\s+/g, '');
   const pass = document.getElementById('su-password').value, pass2 = document.getElementById('su-password2').value;
@@ -5066,6 +5110,14 @@ function createFirstAdmin() {
   if (username.length < 3 || !/^[a-z0-9_]+$/.test(username)) return showErr('setup-err', 'Username: at least 3 characters — letters, numbers and underscores only.');
   if (pass.length < 8) return showErr('setup-err', 'Password must be at least 8 characters.');
   if (pass !== pass2) return showErr('setup-err', 'The two passwords don\'t match.');
+  if (btn) { btn.disabled = true; btn.textContent = 'Creating…'; }
+  const claimed = await claimAdminSlot(username);
+  if (btn) { btn.disabled = false; btn.textContent = 'Create Admin account'; }
+  if (!claimed) {
+    await cloudPullNow(5000);
+    setAuthMode('login');
+    return showErr('login-err', firebaseReady() && !_cloudPulled ? 'Could not reach the cloud to create the Admin account — check your connection and try again.' : 'An Admin account was just created on another device — only one Admin is allowed. Please sign in or register.');
+  }
   const initials = name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
   const user = { name, username, email, dept: 'Administration', role: 'admin', initials, status: 'approved', createdAt: new Date().toLocaleString() };
   setUserPassword(user, pass);
@@ -5112,7 +5164,8 @@ function changeUserRole(username, role) {
   if (currentRole !== 'admin') { toast('Only Admin can change access levels'); return; }
   const u = USER_REGISTRY.find(x => x.username === username);
   if (!u || !ROLES[role] || u.role === role) return;
-  if (u.role === 'admin' && USER_REGISTRY.filter(x => x.role === 'admin').length <= 1) { toast('There must always be at least one Admin'); renderPanel('settings'); return; }
+  if (role === 'admin') { toast('Only one Admin account is allowed'); renderPanel('settings'); return; }
+  if (u.role === 'admin') { toast('The Admin account can\'t be changed here'); renderPanel('settings'); return; }
   logAudit('Users', 'Changed access level', `${u.name} (@${u.username}) · ${ROLES[u.role].label} → ${ROLES[role].label}`);
   u.role = role;
   saveData(true);
