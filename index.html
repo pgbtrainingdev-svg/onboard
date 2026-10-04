@@ -667,6 +667,7 @@
     line-height: 1.6; display: none; border: 1px solid rgba(138,96,0,0.15);
   }
   #auth-screen .pending-box.show { display: block; }
+  @keyframes vidspin { to { transform: rotate(360deg); } }
   /* Video category tabs */
   .vid-tabs { display:flex; gap:0; margin-bottom:16px; background:var(--bg); border-radius:var(--radius-lg); border:1px solid var(--border); overflow:hidden; box-shadow:var(--shadow-sm); }
   .vid-tab-btn {
@@ -957,24 +958,162 @@ function setVideoProgress(username, videoTitle, pct, done, maxTime) {
   }
 }
 
-/* ── Smooth video playback ──
-   Videos are stored as base64 data URLs. Putting a multi-MB string straight into a <video src>
-   (and re-injecting it on every re-render) makes playback stutter or fail. Instead each video
-   is converted ONCE into an in-memory Blob URL and reused. */
+/* ── Smooth video playback (works on phones too) ──
+   Videos are stored as base64 data URLs. Each one is converted ONCE into an in-memory Blob URL
+   and reused. If the video isn't on this device yet (e.g. first time opening it on a phone),
+   it is downloaded from the cloud on demand, with a progress overlay on the player. */
 function _fileSig(data) { return data ? (data.length + ':' + data.slice(0, 48) + ':' + data.slice(-48)) : ''; }
+function _isIOS() { return /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1); }
+function _isSmallDevice() {
+  try { return _isIOS() || /Android|Mobile/i.test(navigator.userAgent) || (window.matchMedia && matchMedia('(pointer:coarse)').matches); } catch (e) { return false; }
+}
+// The MIME type the browser should be told. iPhone .mov / .m4v files are MP4-family files, but
+// Android & Chrome refuse to play them when labelled "video/quicktime" — so they are labelled video/mp4.
+function _playMime(mime, name) {
+  mime = String(mime || '').toLowerCase().split(';')[0].trim();
+  const ext = String(name || '').toLowerCase().split('.').pop();
+  if (!mime || mime === 'application/octet-stream' || !mime.startsWith('video/')) {
+    mime = ({ mp4: 'video/mp4', m4v: 'video/mp4', mov: 'video/mp4', webm: 'video/webm', ogv: 'video/ogg', ogg: 'video/ogg', mkv: 'video/x-matroska', '3gp': 'video/3gpp' })[ext] || 'video/mp4';
+  }
+  if ((mime === 'video/quicktime' || mime === 'video/x-m4v') && !_isIOS()) mime = 'video/mp4'; // iPhone Safari plays QuickTime natively — keep its real label there
+  return mime;
+}
+// base64 data URL -> Blob, decoded in slices. (fetch() on a very large data: URL fails on
+// iPhones and low-memory phones, which is why videos showed a black box there.)
+function dataUrlToBlob(dataUrl, type) {
+  const comma = dataUrl.indexOf(',');
+  const header = dataUrl.slice(5, comma);
+  if (!type) type = header.split(';')[0] || '';
+  if (!/;base64/i.test(header)) return new Blob([decodeURIComponent(dataUrl.slice(comma + 1))], { type });
+  const parts = [], STEP = 4 * 1024 * 1024; // multiple of 4 so every slice decodes on its own
+  for (let i = comma + 1; i < dataUrl.length; i += STEP) {
+    const bin = atob(dataUrl.slice(i, i + STEP));
+    const arr = new Uint8Array(bin.length);
+    for (let j = 0; j < bin.length; j++) arr[j] = bin.charCodeAt(j);
+    parts.push(arr);
+  }
+  return new Blob(parts, { type });
+}
 function playableUrl(obj) {
-  if (obj && !obj.fileUrl && obj.fileId && FILE_INDEX[obj.fileId] && FILE_INDEX[obj.fileId].url) return Promise.resolve(FILE_INDEX[obj.fileId].url);
-  if (!obj || !obj.fileUrl) return Promise.resolve('');
+  if (!obj) return Promise.resolve('');
+  const meta = obj.fileId ? FILE_INDEX[obj.fileId] : null;
+  if (!obj.fileUrl && meta && meta.url) return Promise.resolve(meta.url); // Storage mode — streams straight from its URL
+  if (!obj.fileUrl) {
+    // Not on this device yet — fetch it from the cloud now instead of leaving an empty player.
+    if (!obj.fileId || !meta || !meta.cloud) return Promise.resolve('');
+    // iPhones / phones: stream the cloud chunks straight into a Blob (never one giant text string),
+    // and keep that Blob on the device — this is what keeps iPhone Safari from running out of memory.
+    if (_isSmallDevice()) return phoneVideoUrl(obj.fileId, meta);
+    if (!obj._dlPromise) {
+      obj._dlPromise = getFileData(obj.fileId).then(d => {
+        obj._dlPromise = null;
+        if (d) { obj.fileData = d; obj.fileUrl = d; if ('needsReupload' in obj) obj.needsReupload = false; }
+        return d;
+      }).catch(() => { obj._dlPromise = null; return null; });
+    }
+    return obj._dlPromise.then(d => d ? playableUrl(obj) : '');
+  }
   const sig = _fileSig(obj.fileUrl);
   if (obj._blobUrl && obj._blobSig === sig) return Promise.resolve(obj._blobUrl);
   if (obj._blobPromise && obj._blobSig === sig) return obj._blobPromise;
   obj._blobSig = sig;
-  obj._blobPromise = fetch(obj.fileUrl).then(r => r.blob()).then(b => {
+  const headerMime = obj.fileUrl.startsWith('data:') ? obj.fileUrl.slice(5, obj.fileUrl.indexOf(';')) : '';
+  const type = _playMime((meta && meta.mime) || obj.mimeType || headerMime, (meta && meta.name) || obj.filename || '');
+  obj._blobPromise = new Promise(r => setTimeout(r, 0)).then(() => {
+    const b = dataUrlToBlob(obj.fileUrl, type);
     if (obj._blobUrl) { try { URL.revokeObjectURL(obj._blobUrl); } catch(e) {} }
     obj._blobUrl = URL.createObjectURL(b);
     return obj._blobUrl;
-  }).catch(() => obj.fileUrl); // fall back to the data URL if conversion fails
+  }).catch(err => { console.warn('Video blob conversion failed', err); obj._blobPromise = null; return obj.fileUrl; });
   return obj._blobPromise;
+}
+/* ── Phone / iPhone video path ──
+   Downloads the database chunks and decodes each one to bytes as it arrives, builds a Blob,
+   saves it in this device's IndexedDB as 'vblob_<id>' and plays it from a blob: URL. */
+const _phoneVideoUrls = {}, _phoneVideoJobs = {};
+function phoneVideoUrl(id, meta) {
+  if (_phoneVideoUrls[id]) return Promise.resolve(_phoneVideoUrls[id]);
+  if (_phoneVideoJobs[id]) return _phoneVideoJobs[id];
+  const type = _playMime(meta && meta.mime, meta && meta.name);
+  _phoneVideoJobs[id] = (async () => {
+    let blob = null;
+    try { const saved = await dbGet('vblob_' + id); if (saved && saved.size) blob = saved.type === type ? saved : new Blob([saved], { type }); } catch (e) {}
+    if (!blob) {
+      blob = await cloudDownloadVideoBlob(id, type);
+      if (blob) dbSet('vblob_' + id, blob).catch(err => console.warn('Could not keep video on this device', err));
+    }
+    if (!blob) return '';
+    _phoneVideoUrls[id] = URL.createObjectURL(blob);
+    return _phoneVideoUrls[id];
+  })().catch(err => { console.warn('Phone video load failed', err); return ''; })
+      .finally(() => { delete _phoneVideoJobs[id]; });
+  return _phoneVideoJobs[id];
+}
+async function cloudDownloadVideoBlob(id, type) {
+  if (!firebaseReady()) return null;
+  await ensureFirebaseAuth();
+  const info = (await _fbRoot.child(`files/${id}`).once('value')).val();
+  if (!info || !info.n) return null;
+  const raw = new Array(info.n), bytes = [];
+  let next = 0, got = 0, decodeAt = 0, carry = '', failed = false;
+  const decodeReady = () => {               // decode in order, freeing each text chunk right away
+    while (decodeAt < info.n && raw[decodeAt] != null) {
+      let txt = raw[decodeAt]; raw[decodeAt] = null;
+      if (decodeAt === 0) { const c = txt.indexOf(','); if (txt.startsWith('data:') && c >= 0) txt = txt.slice(c + 1); }
+      txt = carry + txt;
+      const usable = decodeAt === info.n - 1 ? txt.length : txt.length - (txt.length % 4);
+      carry = txt.slice(usable);
+      if (usable) {
+        const bin = atob(txt.slice(0, usable));
+        const arr = new Uint8Array(bin.length);
+        for (let j = 0; j < bin.length; j++) arr[j] = bin.charCodeAt(j);
+        bytes.push(arr);
+      }
+      decodeAt++;
+    }
+  };
+  _reportDl(id, 0);
+  const worker = async () => {
+    while (next < info.n && !failed) {
+      const i = next++;
+      const part = (await _fbRoot.child(`chunks/${id}/${i}`).once('value')).val();
+      if (!part) { failed = true; return; }
+      raw[i] = part; got++;
+      decodeReady();
+      _reportDl(id, Math.round(got / info.n * 100));
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(3, info.n) }, worker));
+  if (failed || decodeAt < info.n) return null;
+  return new Blob(bytes, { type });
+}
+// Download progress (0–100) per fileId, broadcast so open players can show it.
+const _dlProgress = {};
+function _reportDl(id, pct) {
+  _dlProgress[id] = pct;
+  try { window.dispatchEvent(new CustomEvent('oiq-dl-progress', { detail: { id, pct } })); } catch (e) {}
+}
+// Overlay shown on top of a player while it loads / if it can't play.
+function _videoOverlay(el) {
+  if (el._overlay && el._overlay.isConnected) return el._overlay;
+  let wrap = el.parentElement;
+  if (!wrap || !wrap.classList.contains('vid-wrap')) {
+    wrap = document.createElement('div');
+    wrap.className = 'vid-wrap';
+    wrap.style.cssText = 'position:relative;width:100%;' + (el.style.maxWidth ? 'max-width:' + el.style.maxWidth + ';' : '');
+    el.parentNode.insertBefore(wrap, el);
+    wrap.appendChild(el);
+  }
+  const ov = document.createElement('div');
+  ov.style.cssText = 'position:absolute;inset:0;display:none;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:16px;text-align:center;color:#fff;background:rgba(0,0,0,.72);font-size:13px;line-height:1.45;border-radius:inherit;pointer-events:none';
+  wrap.appendChild(ov);
+  el._overlay = ov;
+  return ov;
+}
+function _showVideoOverlay(el, html) {
+  const ov = _videoOverlay(el);
+  if (html == null) { ov.style.display = 'none'; return; }
+  ov.innerHTML = html; ov.style.display = 'flex';
 }
 // <video data-vsrc="welcome"> / <video data-vsrc="lib:3"> get their src filled in here.
 function hydrateVideos(root) {
@@ -982,13 +1121,53 @@ function hydrateVideos(root) {
   root.querySelectorAll('video[data-vsrc]').forEach(el => {
     const key = el.getAttribute('data-vsrc');
     const obj = key === 'welcome' ? WELCOME_VIDEO : VIDEO_LIBRARY[Number(key.split(':')[1])];
+    if (!obj) return;
+    el.setAttribute('playsinline', ''); el.setAttribute('webkit-playsinline', '');
+    if (!el._errHooked) {
+      el._errHooked = true;
+      el.addEventListener('error', () => {
+        if (!el.getAttribute('src')) return;
+        _showVideoOverlay(el, '<i class="ti ti-alert-triangle" style="font-size:26px"></i><div><b>This video can’t play on this device.</b><br>Its format isn’t supported here (e.g. .webm, .mkv, .avi or HEVC). Ask HR/Admin to re-upload it as an <b>MP4 (H.264)</b> file.</div>');
+      });
+      el.addEventListener('loadeddata', () => _showVideoOverlay(el, null));
+    }
+    const fid = obj.fileId;
+    const needsDownload = !obj.fileUrl && !(fid && FILE_INDEX[fid] && FILE_INDEX[fid].url) && !(fid && _phoneVideoUrls[fid]);
+    let onProg = null;
+    if (needsDownload) {
+      const paint = pct => _showVideoOverlay(el, '<div style="width:28px;height:28px;border:3px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:vidspin 0.9s linear infinite"></div><div>Loading video… ' + (pct != null ? pct + '%' : '') + '</div><div style="font-size:11px;opacity:.75">First time on this device only — keep this page open.</div>');
+      paint(fid ? _dlProgress[fid] : null);
+      onProg = e => { if (e.detail && e.detail.id === fid && el.isConnected) paint(e.detail.pct); };
+      window.addEventListener('oiq-dl-progress', onProg);
+    }
     playableUrl(obj).then(url => {
-      if (!url || !el.isConnected) return;
+      if (onProg) window.removeEventListener('oiq-dl-progress', onProg);
+      if (!el.isConnected) return;
+      if (!url) {
+        _showVideoOverlay(el, '<i class="ti ti-cloud-off" style="font-size:26px"></i><div><b>Couldn’t load this video.</b><br>Check your internet connection and reopen it.</div>');
+        return;
+      }
+      _showVideoOverlay(el, null);
       if (el.src !== url) { el.src = url; el.load(); }
       if (el._onReady) el._onReady();
     });
   });
 }
+// Heads-up for admins: only MP4 (H.264) plays on every phone. Other formats / very large files are flagged at upload.
+function videoUploadWarning(f) {
+  if (!f || !/^video\/|\.(mp4|m4v|mov|webm|mkv|avi|wmv|flv|3gp|ogv)$/i.test(f.type || f.name)) return;
+  const ext = String(f.name || '').toLowerCase().split('.').pop();
+  const mb = (f.size || 0) / 1048576;
+  if (!['mp4', 'm4v', 'mov'].includes(ext)) toast(`Heads-up: "${f.name}" is .${ext} — it may not play on iPhones/phones. MP4 (H.264) plays everywhere.`);
+  else if (mb > 80) toast(`Heads-up: "${f.name}" is ${mb.toFixed(0)} MB — large videos load slowly on phones. Compressing to 720p MP4 helps.`);
+}
+document.addEventListener('change', e => {
+  const t = e.target;
+  if (t && t.type === 'file' && /video/.test(t.accept || '') && t.files) Array.from(t.files).forEach(videoUploadWarning);
+}, true);
+document.addEventListener('drop', e => {
+  if (e.dataTransfer && e.dataTransfer.files) Array.from(e.dataTransfer.files).forEach(videoUploadWarning);
+}, true);
 // True while a video on the main page is mid-play — background sync must not re-render then,
 // otherwise the video restarts from zero.
 function videoBusy() {
@@ -3822,6 +4001,8 @@ function forgetFile(id) {
   if (!id) return;
   delete LOCAL_FILES[id];
   dbDelete('file_' + id).catch(() => {});
+  dbDelete('vblob_' + id).catch(() => {});
+  if (typeof _phoneVideoUrls !== 'undefined' && _phoneVideoUrls[id]) { try { URL.revokeObjectURL(_phoneVideoUrls[id]); } catch (e) {} delete _phoneVideoUrls[id]; }
   const had = FILE_INDEX[id];
   delete FILE_INDEX[id];
   if (had && typeof cloudDeleteFile === 'function') cloudDeleteFile(id, had);
@@ -4488,8 +4669,19 @@ async function cloudDownloadFile(id, meta) {
       }
       const info = (await _fbRoot.child(`files/${id}`).once('value')).val();
       if (!info || !info.n) return null;
-      const parts = [];
-      for (let i = 0; i < info.n; i++) parts.push((await _fbRoot.child(`chunks/${id}/${i}`).once('value')).val() || '');
+      // Fetch a few chunks at a time (much faster on mobile data) and report progress to the player.
+      const parts = new Array(info.n);
+      let next = 0, done = 0;
+      _reportDl(id, 0);
+      const worker = async () => {
+        while (next < info.n) {
+          const i = next++;
+          parts[i] = (await _fbRoot.child(`chunks/${id}/${i}`).once('value')).val() || '';
+          done++; _reportDl(id, Math.round(done / info.n * 100));
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(4, info.n) }, worker));
+      if (parts.some(p => !p)) return null;
       return parts.join('');
     } catch (err) { console.warn('File download failed:', id, err); return null; }
     finally { setTimeout(() => delete _downloading[id], 0); }
@@ -4503,7 +4695,10 @@ async function cloudFetchMissingFiles() {
   if (!firebaseReady() || _fetchingMissing) return;
   _fetchingMissing = true;
   try {
-    const items = [...VIDEO_LIBRARY, ...(WELCOME_VIDEO ? [WELCOME_VIDEO] : []), ...FORM_LIBRARY]
+    // On phones/tablets videos are NOT all pre-downloaded (holding several large videos in memory
+    // crashes mobile browsers) — each one downloads when it is opened instead.
+    const vids = _isSmallDevice() ? [] : [...VIDEO_LIBRARY, ...(WELCOME_VIDEO ? [WELCOME_VIDEO] : [])];
+    const items = [...vids, ...FORM_LIBRARY]
       .filter(o => o && o.fileId && !o.fileData && FILE_INDEX[o.fileId] && FILE_INDEX[o.fileId].cloud && !FILE_INDEX[o.fileId].url);
     for (const o of items) {
       const d = await getFileData(o.fileId);
