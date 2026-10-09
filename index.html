@@ -1282,6 +1282,7 @@ function switchRole(role) {
 
 // Live sidebar badge counts (was a hard-coded "2" on Exams before).
 function navBadgeCount(k) {
+  if (k === 'settings' && currentRole === 'admin') return pendingCount();
   if (k === 'exams' && currentRole === 'employee' && currentUser) {
     return EXAM_LIBRARY.filter((ex, i) => !EXAM_SUBMISSIONS.some(s => s.username === currentUser.username && s.examIdx === i)).length;
   }
@@ -1349,6 +1350,16 @@ function renderPanel(panel) {
 }
 
 /* ── Panels ── */
+function pendingBanner() {
+  const n = currentRole === 'admin' ? pendingCount() : 0;
+  if (!n) return '';
+  const names = PENDING_USERS.filter(u => u.status === 'pending').slice(0, 3).map(u => u.name).join(', ') + (n > 3 ? ` and ${n - 3} more` : '');
+  return `<div class="card" style="display:flex;align-items:center;gap:12px;padding:14px 18px;margin-bottom:16px;border-left:4px solid var(--red-text, #c0392b)">
+    <i class="ti ti-user-plus" aria-hidden="true" style="font-size:22px;color:var(--red-text, #c0392b)"></i>
+    <div style="flex:1"><strong>${n} registration${n > 1 ? 's' : ''} waiting for approval</strong><div style="font-size:12.5px;color:var(--text3)">${names}</div></div>
+    <button class="inline-btn" style="padding:6px 14px" onclick="renderNav('settings');renderPanel('settings')">Review</button>
+  </div>`;
+}
 function panelDashboard() {
   if (currentRole === 'employee') return locked('Dashboard is restricted to HR and managers.');
   const name = currentUser ? currentUser.name.split(' ')[0] : 'there';
@@ -1414,7 +1425,7 @@ function panelDashboard() {
     </div>`;
   }).join('');
 
-  return `
+  return `${pendingBanner()}
   <div style="background:linear-gradient(135deg,var(--coral) 0%,var(--coral-dark) 100%);border-radius:var(--radius-lg);padding:22px 28px;margin-bottom:22px;display:flex;align-items:center;justify-content:space-between;box-shadow:var(--shadow-md)">
     <div>
       <div style="font-size:18px;font-weight:700;color:#fff;letter-spacing:-0.02em">Hi, ${name}! 👋</div>
@@ -3376,7 +3387,7 @@ function updateBell() {
   // keep the Exams sidebar badge in step too
   if (typeof currentPanel !== 'undefined' && currentUser && document.getElementById('sidebar-nav')) {
     const active = document.querySelector('#sidebar-nav .nav-item.active');
-    if (currentRole === 'employee' && active) renderNav(currentPanel);
+    if ((currentRole === 'employee' || currentRole === 'admin') && active) renderNav(currentPanel);
   }
 }
 
@@ -4260,7 +4271,7 @@ function initSync() {
         loadData(true); // re-read localStorage
         if (typeof currentPanel !== 'undefined' && typeof renderPanel === 'function') {
           // Re-render current panel without disrupting user input
-          if (!['exams','settings'].includes(currentPanel) && !videoBusy()) {
+          if (!(currentPanel === 'exams' || (currentPanel === 'settings' && adminTyping())) && !videoBusy()) {
             renderPanel(currentPanel);
           }
         }
@@ -4275,7 +4286,7 @@ function initSync() {
         const d = JSON.parse(e.newValue);
         applySnapshot(d, true);
         if (typeof currentPanel !== 'undefined' && typeof renderPanel === 'function') {
-          if (!['exams','settings'].includes(currentPanel) && !videoBusy()) renderPanel(currentPanel);
+          if (!(currentPanel === 'exams' || (currentPanel === 'settings' && adminTyping())) && !videoBusy()) renderPanel(currentPanel);
         }
         updateBell();
       } catch(err) {}
@@ -4289,7 +4300,7 @@ function initSync() {
       const d = JSON.parse(raw);
       applySnapshot(d, true);
       if (typeof currentPanel !== 'undefined' && typeof renderPanel === 'function') {
-        if (!['exams','settings'].includes(currentPanel) && !videoBusy()) renderPanel(currentPanel);
+        if (!(currentPanel === 'exams' || (currentPanel === 'settings' && adminTyping())) && !videoBusy()) renderPanel(currentPanel);
       }
       updateBell();
     } catch(e) {}
@@ -4462,7 +4473,7 @@ function applyCloudData(data) {
     saveData(true); // refresh this browser's offline copy (no push: nothing differs from the cloud)
   } finally { _applyingRemote = false; }
   cloudFetchMissingFiles();
-  if (typeof currentPanel !== 'undefined' && currentUser && !['exams', 'settings'].includes(currentPanel) && !videoBusy() && !document.getElementById('modal-overlay').classList.contains('open')) renderPanel(currentPanel);
+  if (typeof currentPanel !== 'undefined' && currentUser && !(currentPanel === 'exams' || (currentPanel === 'settings' && adminTyping())) && !videoBusy() && !document.getElementById('modal-overlay').classList.contains('open')) renderPanel(currentPanel);
   if (currentUser) { renderNav(currentPanel); updateBell(); }
 }
 
@@ -4580,6 +4591,112 @@ function markCloudLinked() { try { localStorage.setItem(CLOUD_LINK_KEY, FIREBASE
 function cloudPullNow(timeoutMs) {
   if (!firebaseReady()) return Promise.resolve(false);
   return Promise.race([cloudPull(), new Promise(r => setTimeout(() => r(false), timeoutMs || 4000))]);
+}
+
+
+/* ── Registration → cloud, written directly (doesn't wait for the background sync) ── */
+async function sendRegistrationToCloud(rec, notif) {
+  try {
+    if (!firebaseReady()) return false;
+    await ensureFirebaseAuth();
+    const uKey = fbEsc(rec.username), nKey = fbEsc(String(notif.id));
+    const uVal = fbCanon(rec), nVal = fbCanon(notif);
+    const upd = {}; upd['c/pendingUsers/' + uKey] = uVal; upd['c/notifications/' + nKey] = nVal; upd.updatedAt = Date.now();
+    await Promise.race([_fbData.update(upd), new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 12000))]);
+    if (_cloudBase) {
+      _cloudBase.c = _cloudBase.c || {};
+      (_cloudBase.c.pendingUsers = _cloudBase.c.pendingUsers || {})[uKey] = canonStr(uVal);
+      (_cloudBase.c.notifications = _cloudBase.c.notifications || {})[nKey] = canonStr(nVal);
+    }
+    return true;
+  } catch (err) { console.warn('Registration upload failed:', err); return false; }
+}
+
+/* ── Admin: live alert for new access requests ──
+   A dedicated listener on pendingUsers, so a new request shows up immediately even while the
+   Admin's own changes are still being saved (the main listener waits in that case). */
+let _regWatchOn = false, _regWatchReady = false;
+const _regAlerted = new Set();
+function pendingCount() { return PENDING_USERS.filter(u => u.status === 'pending').length; }
+function adminTyping() {
+  const a = document.activeElement;
+  return !!(a && ['INPUT', 'TEXTAREA', 'SELECT'].includes(a.tagName) && a.closest('#main-content'));
+}
+function regBeep() {
+  try {
+    const C = window.AudioContext || window.webkitAudioContext; if (!C) return;
+    const ctx = regBeep._c || (regBeep._c = new C());
+    [0, 0.18].forEach((t, i) => {
+      const o = ctx.createOscillator(), g = ctx.createGain();
+      o.frequency.value = i ? 1046 : 784; o.type = 'sine';
+      g.gain.setValueAtTime(0.0001, ctx.currentTime + t);
+      g.gain.exponentialRampToValueAtTime(0.25, ctx.currentTime + t + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + t + 0.16);
+      o.connect(g); g.connect(ctx.destination); o.start(ctx.currentTime + t); o.stop(ctx.currentTime + t + 0.18);
+    });
+  } catch (e) {}
+}
+function regAlert(u) {
+  if (!currentUser || currentRole !== 'admin' || _regAlerted.has(u.username)) return;
+  _regAlerted.add(u.username);
+  toast(`🔔 New registration: ${u.name} (@${u.username}) — open Settings to approve`);
+  regBeep();
+  try {
+    if (window.Notification && Notification.permission === 'granted' && document.visibilityState !== 'visible') {
+      const n = new Notification('OnboardIQ — new registration', { body: `${u.name} (@${u.username}) is waiting for approval.` });
+      n.onclick = () => { window.focus(); renderNav('settings'); renderPanel('settings'); n.close(); };
+    }
+  } catch (e) {}
+}
+function refreshAfterRegChange() {
+  if (!currentUser) return;
+  renderNav(currentPanel); updateBell();
+  if (currentPanel === 'settings' && !adminTyping() && !document.getElementById('modal-overlay').classList.contains('open')) renderPanel('settings');
+  if (currentPanel === 'dashboard' && !videoBusy() && !document.getElementById('modal-overlay').classList.contains('open')) renderPanel('dashboard');
+}
+function mergeCloudRecord(coll, arr, key, val) {
+  // Add/refresh one record from the cloud without touching anything else, and remember the cloud
+  // holds it so the next push doesn't think it was deleted here.
+  const rec = fbRestore(val), keyOf = CLOUD_KEYED[coll];
+  if (coll === 'pendingUsers' && USER_REGISTRY.some(u => u.username === rec.username)) return false;
+  if (coll === 'notifications' && rec.readBy) rec.readBy = asList(rec.readBy);
+  const i = arr.findIndex(r => String(keyOf(r)) === String(keyOf(rec)));
+  if (i > -1 && canonStr(fbCanon(arr[i])) === canonStr(val)) return false;
+  _applyingRemote = true;
+  try {
+    if (i > -1) arr[i] = rec; else arr.push(rec);
+    if (_cloudBase) { _cloudBase.c = _cloudBase.c || {}; (_cloudBase.c[coll] = _cloudBase.c[coll] || {})[key] = canonStr(val); }
+    saveData(true);
+  } finally { _applyingRemote = false; }
+  return true;
+}
+async function startRegistrationWatch() {
+  if (_regWatchOn || !firebaseReady()) return;
+  _regWatchOn = true;
+  await ensureFirebaseAuth();
+  const pRef = _fbData.child('c/pendingUsers'), nRef = _fbData.child('c/notifications');
+  const onUser = snap => {
+    const val = snap.val(); if (!val) return;
+    const changed = mergeCloudRecord('pendingUsers', PENDING_USERS, snap.key, val);
+    const u = fbRestore(val);
+    if (_regWatchReady && u.status === 'pending') regAlert(u);
+    if (changed) refreshAfterRegChange();
+  };
+  pRef.on('child_added', onUser);
+  pRef.on('child_changed', onUser);
+  nRef.on('child_added', snap => {
+    const val = snap.val(); if (!val || val.type !== 'registration') return;
+    if (mergeCloudRecord('notifications', NOTIFICATIONS, snap.key, val)) updateBell();
+  });
+  try { await pRef.once('value'); } catch (e) {}
+  _regWatchReady = true;
+}
+// Called when the Admin signs in: ask for desktop alerts and point out anything waiting.
+function adminRegistrationsOnSignIn() {
+  if (currentRole !== 'admin') return;
+  try { if (window.Notification && Notification.permission === 'default') Notification.requestPermission(); } catch (e) {}
+  const n = pendingCount();
+  if (n) setTimeout(() => toast(`🔔 ${n} registration${n > 1 ? 's' : ''} waiting for your approval — see Settings`), 600);
 }
 
 async function startRealtimeSync() {
@@ -4722,6 +4839,7 @@ async function cloudInit() {
   if (!firebaseReady()) { updateSyncBadge('unconfigured'); return; }
   await cloudPull();
   startRealtimeSync();
+  startRegistrationWatch();
   window.addEventListener('online', () => { cloudPush(); cloudQueueUploads(); });
 }
 
@@ -4748,6 +4866,7 @@ function restoreSession() {
     renderNav(first);
     renderPanel(first);
     updateBell();
+    adminRegistrationsOnSignIn();
     return true;
   } catch(e) { return false; }
 }
@@ -5422,6 +5541,7 @@ function enterApp(user) {
   renderNav(first);
   renderPanel(first);
   updateBell();
+  adminRegistrationsOnSignIn();
 }
 // Admin: change someone's access level (Employee / Manager / HR / Admin)
 function changeUserRole(username, role) {
@@ -5480,7 +5600,10 @@ function doLogin() {
   });
 }
 
-function doRegister() {
+async function doRegister() {
+  const regBtn = document.querySelector('#register-form .auth-btn-primary') || document.querySelector('button[onclick="doRegister()"]');
+  if (regBtn && regBtn.disabled) return;
+  if (firebaseReady()) { if (regBtn) { regBtn.disabled = true; regBtn.textContent = 'Checking…'; } try { await cloudPullNow(5000); } catch (e) {} if (regBtn) { regBtn.disabled = false; regBtn.textContent = 'Request access'; } }
   const name     = document.getElementById('reg-name').value.trim();
   const email    = document.getElementById('reg-email').value.trim().toLowerCase();
   const username = document.getElementById('reg-username').value.trim().toLowerCase().replace(/\s+/g, '');
@@ -5500,11 +5623,12 @@ function doRegister() {
   if (allUsers.find(u => u.username === username))        return showErr('reg-err', 'That username is already taken. Please choose another.');
 
   const initials = name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
-  PENDING_USERS.push({ name, username, email, ...makePasswordFields(pass), dept: 'Unassigned', role: 'employee', initials, status: 'pending', requestedAt: new Date().toLocaleString() });
+  const regRec = { name, username, email, ...makePasswordFields(pass), dept: 'Unassigned', role: 'employee', initials, status: 'pending', requestedAt: new Date().toLocaleString() };
+  PENDING_USERS.push(regRec);
   logAudit('Account', 'Registered (awaiting approval)', `${name} (@${username}) · ${email}`, { name, username, role: 'employee' });
 
   // Push notification for admin
-  NOTIFICATIONS.push({
+  const regNotif = {
     id: Date.now(),
     type: 'registration',
     title: `New registration: ${name}`,
@@ -5512,10 +5636,27 @@ function doRegister() {
     time: new Date().toLocaleString(),
     read: false,
     email
-  });
+  };
+  NOTIFICATIONS.push(regNotif);
 
   const pending = document.getElementById('reg-pending');
-  pending.innerHTML = `<strong>Registration submitted.</strong><br>Sign in later with your username <strong>${username}</strong> (or your email <strong>${email}</strong>) and the password you just chose.<br>An Admin will review your request — you can sign in as soon as it's approved.`;
+  // Send the request straight to the cloud and only say "submitted" once the Admin can really see it.
+  if (firebaseReady()) {
+    if (regBtn) { regBtn.disabled = true; regBtn.textContent = 'Sending…'; }
+    pending.innerHTML = '<strong>Sending your request…</strong><br>Please keep this page open.';
+    pending.classList.add('show');
+    const sent = await sendRegistrationToCloud(regRec, regNotif);
+    if (regBtn) { regBtn.disabled = false; regBtn.textContent = 'Request access'; }
+    if (!sent) {
+      // Undo locally so the person can simply try again
+      const pi = PENDING_USERS.indexOf(regRec); if (pi > -1) PENDING_USERS.splice(pi, 1);
+      const ni = NOTIFICATIONS.indexOf(regNotif); if (ni > -1) NOTIFICATIONS.splice(ni, 1);
+      saveData(true);
+      pending.classList.remove('show');
+      return showErr('reg-err', 'Your request could not be sent — please check your internet connection and press "Request access" again.');
+    }
+  }
+  pending.innerHTML = `<strong>Registration submitted ✓ — the Admin has been notified.</strong><br>Sign in later with your username <strong>${username}</strong> (or your email <strong>${email}</strong>) and the password you just chose.<br>An Admin will review your request — you can sign in as soon as it's approved.`;
   pending.classList.add('show');
   document.getElementById('reg-name').value     = '';
   document.getElementById('reg-email').value    = '';
